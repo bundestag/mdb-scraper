@@ -147,7 +147,7 @@ def upload_json(persons, organizations):
                            validate_certs=False)
     bucket = conn.get_bucket('offenesparlament')
     k = Key(bucket)
-    k.key = 'exports/popolo.json'
+    k.key = 'popolo-export.json'
     data = json.dumps({
         'organizations': organizations,
         'persons': persons
