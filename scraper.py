@@ -129,11 +129,11 @@ def scrape_index():
         scrape_gremium(info_url.text.strip(), orgs)
 
     persons = []
-    # doc = open_xml(MDB_INDEX_URL)
-    # for info_url in doc.findall(".//mdbInfoXMLURL"):
-    #     person = scrape_mdb(info_url.text, orgs)
-    #     # pprint(person)
-    #     persons.append(person)
+    doc = open_xml(MDB_INDEX_URL)
+    for info_url in doc.findall(".//mdbInfoXMLURL"):
+        person = scrape_mdb(info_url.text, orgs)
+        # pprint(person)
+        persons.append(person)
 
     upload_json(persons, orgs.values())
 
@@ -152,8 +152,8 @@ def upload_json(persons, organizations):
         'organizations': organizations,
         'persons': persons
     })
-    k.set_metadata('Content-Type', 'application/json')
     k.set_contents_from_string(data)
+    k.set_metadata('Content-Type', 'application/json')
     k.make_public()
     print k.generate_url(0, query_auth=False, force_http=True)
 
