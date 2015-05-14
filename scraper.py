@@ -1,156 +1,297 @@
 # coding: utf-8
 from datetime import datetime
+from normality import slugify
+from hashlib import sha1
 import requests
 from lxml import etree
+from pprint import pprint
 
 URL = "https://www.bundestag.de/"
 MDB_INDEX_URL = URL + "xml/mdb/index.xml"
 AUSSCHUSS_INDEX_URL = URL + "xml/ausschuesse/index.xml"
 AUSSCHUSS_PATTERN = URL + "bundestag/ausschuesse17/%s/index.jsp"
+GENDERS = {
+    'Weiblich': 'female',
+    u'Männlich': 'male'
+}
 
 
 def open_xml(url):
     res = requests.get(url)
-    return etree.parse(res.content)
+    return etree.fromstring(res.content)
 
 
 def parse_date(text):
-    return datetime.strptime(text, '%d.%m.%Y').isoformat()
+    try:
+        return datetime.strptime(text, '%d.%m.%Y').date().isoformat()
+    except:
+        return text
 
 
-def add_to_gremium(node, url, role, engine):
-    key = node.get('id')
-    table = sl.get_table(engine, 'gremium')
-    g = sl.find_one(engine, table, key=key)
-    if g is None:
-        g = {'key': key, 'type': 'sonstiges'}
-        g['name'] = node.findtext('gremiumName')
-        g['url'] = node.findtext('gremiumURL')
-        sl.upsert(engine, table, g, unique=['key'])
-    table = sl.get_table(engine, 'gremium_mitglieder')
-    sl.upsert(engine, table, {
-        'gremium_key': g['key'],
-        'person_source_url': url,
-        'role': role
-    }, unique=['person_source_url', 'gremium_key', 'role'])
+def make_id(group, id):
+    id = slugify(unicode(id), sep='-')
+    return 'de.bundestag.data/%s/%s' % (group, id)
 
 
-def scrape_gremium(engine, url, force=False):
+def make_link_id(lid, rid):
+    link = '%s:%s' % (lid, rid)
+    return sha1(link).hexdigest()
+
+
+def make_name(data):
+    name = data['academic_prefix'], data['given_name'], data['honorific_prefix'], \
+        data['family_name']
+    name = ' '.join([n for n in name if len(n.strip())])
+    if len(data['location']):
+        name += ' (%s)' % data['location']
+    return name
+
+
+def add_to_gremium(node, person_id, role, orgs):
+    id = node.get('id') or 'aeltestenrat'
+    if id not in orgs:
+        orgs[id] = {
+            'id': make_id('gremium', id),
+            'name': node.findtext('gremiumName'),
+            'links': [{
+                'note': 'Bundestag.de',
+                'url': node.findtext('gremiumURL')
+            }],
+            'identifiers': [{
+                'identifier': node.get('id'),
+                'scheme': 'bundestag'
+            }],
+            'classification': 'Sonstiges'
+        }
+    membership_data = {
+        'id': make_link_id(person_id, orgs[id]['id']),
+        'person_id': person_id,
+        'organization_id': orgs[id]['id'],
+        'role': role,
+        'label': '%s, %s' % (role, orgs[id]['name'])
+    }
+    return membership_data
+
+
+def scrape_gremium(url, orgs):
     doc = open_xml(url)
-    a = {'source_url': url}
-    a['key'] = doc.findtext('/ausschussId')
-    a['name'] = doc.findtext('/ausschussName')
-    a['aufgabe'] = doc.findtext('/ausschussAufgabe')
-    a['image_url'] = doc.findtext('/ausschussBildURL')
-    a['image_copyright'] = doc.findtext('/ausschussCopyright')
-    a['url'] = AUSSCHUSS_PATTERN % a['key']
-    a['type'] = 'ausschuss'
-    return a
+    id = doc.findtext('./ausschussId')
+    org_data = {
+        'id': make_id('gremium', id),
+        'name': doc.findtext('./ausschussName'),
+        'classification': 'Ausschuss',
+        'description': doc.findtext('./ausschussAufgabe'),
+        'image': doc.findtext('.//ausschussBildURL'),
+        'image_copyright': doc.findtext('./ausschussCopyright'),
+        'links': [
+            {
+                'note': 'Bundestag.de',
+                'url': doc.findtext('.//ausschussSourceURL'),
+            },
+            {
+                'note': 'Bundestag XML',
+                'url': url
+            }
+        ],
+        'identifiers': [{
+            'identifier': id,
+            'scheme': 'bundestag'
+        }]
+    }
+    if doc.findtext('.//ausschussKontakt'):
+        org_data['contact_details'] = [{
+            'type': 'address',
+            'label': 'Anschrift',
+            'value': doc.findtext('.//ausschussKontakt')
+        }]
+    orgs[id] = org_data
 
 
 def scrape_index():
+    orgs = {
+        '18bt': {
+            'id': make_id('wahlperiode', '18'),
+            'name': '18. Deutscher Bundestag',
+            'links': [{
+                'note': 'Bundestag.de',
+                'url': 'https://www.bundestag.de'
+            }],
+            'classification': 'Parlament'
+        }
+    }
     doc = open_xml(AUSSCHUSS_INDEX_URL)
-    for info_url in doc.findall("//ausschussDetailXML"):
-        yield info_url.text.strip()
+    for info_url in doc.findall(".//ausschussDetailXML"):
+        scrape_gremium(info_url.text.strip(), orgs)
 
+    pprint(orgs)
+
+    persons = []
     doc = open_xml(MDB_INDEX_URL)
-    for info_url in doc.findall("//mdbInfoXMLURL"):
-        yield info_url.text
+    for info_url in doc.findall(".//mdbInfoXMLURL"):
+        person = scrape_mdb(info_url.text, orgs)
+        # pprint(person)
+        persons.append(person)
+
+    import json
+    with open('data.json', 'wb') as fh:
+        json.dump({
+            'organizations': orgs.values(),
+            'persons': persons
+        }, fh)
 
 
-def scrape_mdb(engine, url, force=False):
+def scrape_mdb(url, orgs):
     doc = open_xml(url)
-    id = int(doc.findtext('//mdbID'))
-    table_person = sl.get_table(engine, 'person')
-    table_rolle = sl.get_table(engine, 'rolle')
-    p = {'source_url': url}
-    r = {'person_source_url': url, 'funktion': 'MdB'}
-
-    r['mdb_id'] = p['mdb_id'] = id
-    r['status'] = doc.find('//mdbID').get('status')
-    if doc.findtext('//mdbAustrittsdatum'):
-        r['austritt'] = parse_date(doc.findtext('//mdbAustrittsdatum'))
-    p['vorname'] = doc.findtext('//mdbVorname')
-    p['nachname'] = doc.findtext('//mdbZuname')
-    p['adelstitel'] = doc.findtext('//mdbAdelstitel')
-    p['titel'] = doc.findtext('//mdbAkademischerTitel')
-    p['ort'] = doc.findtext('//mdbOrtszusatz')
-    p['geburtsdatum'] = doc.findtext('//mdbGeburtsdatum')
-    p['religion'] = doc.findtext('//mdbReligionKonfession')
-    p['hochschule'] = doc.findtext('//mdbHochschulbildung')
-    p['beruf'] = doc.findtext('//mdbBeruf')
-    p['berufsfeld'] = doc.find('//mdbBeruf').get('berufsfeld')
-    p['geschlecht'] = doc.findtext('//mdbGeschlecht')
-    p['familienstand'] = doc.findtext('//mdbFamilienstand')
-    p['kinder'] = doc.findtext('//mdbAnzahlKinder')
-    r['fraktion'] = doc.findtext('//mdbFraktion')
-    p['fraktion'] = doc.findtext('//mdbFraktion')
-    p['partei'] = doc.findtext('//mdbPartei')
-    p['land'] = doc.findtext('//mdbLand')
-    r['gewaehlt'] = doc.findtext('//mdbGewaehlt')
-    p['bio_url'] = doc.findtext('//mdbBioURL')
-    p['bio'] = doc.findtext('//mdbBiografischeInformationen')
-    p['wissenswertes'] = doc.findtext('//mdbWissenswertes')
-    p['homepage_url'] = doc.findtext('//mdbHomepageURL')
-    p['telefon'] = doc.findtext('//mdbTelefon')
-    p['angaben'] = doc.findtext('//mdbVeroeffentlichungspflichtigeAngaben')
-    p['foto_url'] = doc.findtext('//mdbFotoURL')
-    p['foto_copyright'] = doc.findtext('//mdbFotoCopyright')
-    p['reden_plenum_url'] = doc.findtext('//mdbRedenVorPlenumURL')
-    p['reden_plenum_rss_url'] = doc.findtext('//mdbRedenVorPlenumRSS')
-
-    p['wk_nummer'] = doc.findtext('//mdbWahlkreisNummer')
-    p['wk_name'] = doc.findtext('//mdbWahlkreisName') 
-    p['wk_url'] = doc.findtext('//mdbWahlkreisURL')
-
-    for website in doc.findall('//mdbSonstigeWebsite'):
-        type_ = website.findtext('mdbSonstigeWebsiteTitel')
-        ws_url = website.findtext('mdbSonstigeWebsiteURL')
-        if type_.lower() == 'twitter':
-            p['twitter_url'] = ws_url
-        if type_.lower() == 'facebook':
-            p['facebook_url'] = ws_url
-
-    if doc.findtext('//mdbBundestagspraesident'):
-        sl.upsert(engine, table_rolle, {
-            'person_source_url': url,
-            'funktion': u'Bundestagspräsident',
+    if not doc.findtext('.//mdbID'):
+        print 'FAILED', url
+        return
+    id = int(doc.findtext('.//mdbID'))
+    person_data = {
+        'id': make_id('mdb', id),
+        'given_name': doc.findtext('.//mdbVorname'),
+        'family_name': doc.findtext('.//mdbZuname'),
+        'honorific_prefix': doc.findtext('.//mdbAdelstitel'),
+        'academic_prefix': doc.findtext('.//mdbAkademischerTitel'),
+        'location': doc.findtext('.//mdbOrtszusatz'),
+        'birth_date': parse_date(doc.findtext('.//mdbGeburtsdatum')),
+        'faith': doc.findtext('.//mdbReligionKonfession'),
+        'profession': doc.findtext('.//mdbBeruf'),
+        'profession_group': doc.find('.//mdbBeruf').get('berufsfeld'),
+        'graduate_education': doc.findtext('.//mdbHochschulbildung'),
+        'gender': GENDERS[doc.findtext('.//mdbGeschlecht')],
+        'children': doc.findtext('.//mdbAnzahlKinder'),
+        'state': doc.findtext('.//mdbLand'),
+        'trivia': doc.findtext('.//mdbWissenswertes'),
+        'interests': doc.findtext('.//mdbVeroeffentlichungspflichtigeAngaben'),
+        'marital_status': doc.findtext('.//mdbFamilienstand'),
+        'biography': doc.findtext('.//mdbBiografischeInformationen'),
+        'image': doc.findtext('.//mdbFotoURL'),
+        'image_copyright': doc.findtext('.//mdbFotoCopyright'),
+        'links': [
+            {
+                'note': 'Bundestag.de',
+                'url': doc.findtext('.//mdbBioURL'),
             },
-            unique=['person_source_url', 'funktion'])
-    if doc.findtext('//mdbBundestagsvizepraesident'):
-        sl.upsert(engine, table_rolle, {
-            'person_source_url': url,
-            'funktion': u'Bundestagsvizepräsident',
+            {
+                'note': 'Bundestag XML',
+                'url': url
             },
-            unique=['person_source_url', 'funktion'])
+            {
+                'note': 'Speeches in plenary',
+                'url': doc.findtext('.//mdbRedenVorPlenumURL')
+            },
+            {
+                'note': 'Speeches in plenary (RSS)',
+                'url': doc.findtext('.//mdbRedenVorPlenumRSS')
+            }
+        ],
+        'identifiers': [{
+            'identifier': id,
+            'scheme': 'bundestag'
+        }],
+        'contact_details': [
+            {
+                'type': 'phone',
+                'label': 'Telefon',
+                'value': doc.findtext('.//mdbTelefon')
+            }
+        ],
+        'memberships': []
+    }
 
-    for n in doc.findall('//mdbObleuteGremium'):
-        add_to_gremium(n, url, 'obleute', engine)
+    if doc.findtext('.//mdbHomepageURL'):
+        person_data['links'].append({
+            'note': 'Homepage',
+            'url': doc.findtext('.//mdbHomepageURL')
+        })
 
-    for n in doc.findall('//mdbVorsitzGremium'):
-        add_to_gremium(n, url, 'vorsitz', engine)
+    for website in doc.findall('.//mdbSonstigeWebsite'):
+        person_data['links'].append({
+            'note': website.findtext('./mdbSonstigeWebsiteTitel'),
+            'url': website.findtext('./mdbSonstigeWebsiteURL')
+        })
 
-    for n in doc.findall('//mdbStellvertretenderVorsitzGremium'):
-        add_to_gremium(n, url, 'stellv_vorsitz', engine)
+    person_data['name'] = make_name(person_data)
+    print 'Scraping', person_data['id'], person_data['name']
 
-    for n in doc.findall('//mdbVorsitzSonstigesGremium'):
-        add_to_gremium(n, url, 'vorsitz', engine)
+    for key, value in person_data.items():
+        if isinstance(value, basestring) and not len(value.strip()):
+            del person_data[key]
 
-    for n in doc.findall('//mdbStellvVorsitzSonstigesGremium'):
-        add_to_gremium(n, url, 'stellv_vorsitz', engine)
+    #
+    # Membership role for the parliament.
+    #
+    mdb_membership = {
+        'person_id': person_data['id'],
+        'organization_id': orgs['18bt']['id'],
+        'id': make_link_id(person_data['id'], orgs['18bt']['id']),
+        'role': 'Mitglied des Bundestages',
+        'status': doc.find('.//mdbID').get('status'),
+        'mandate_type': doc.findtext('.//mdbGewaehlt'),
+        'faction': doc.findtext('.//mdbFraktion')
+    }
 
-    for n in doc.findall('//mdbOrdentlichesMitgliedGremium'):
-        add_to_gremium(n, url, 'mitglied', engine)
+    wk = doc.findtext('.//mdbWahlkreisNummer')
+    if wk:
+        mdb_membership['area'] = {
+            'name': doc.findtext('.//mdbWahlkreisName'),
+            'identifier': make_id('wahlkreis', wk),
+            'constituency': wk,
+            'url': doc.findtext('.//mdbWahlkreisURL'),
+            'classification': 'Wahlkreis',
+            'parent_id': make_id('land', doc.findtext('.//mdbLand'))
+        }
+    else:
+        mdb_membership['area'] = {
+            'name': doc.findtext('.//mdbLand'),
+            'identifier': make_id('land', doc.findtext('.//mdbLand')),
+            'classification': 'Bundesland'
+        }
 
-    for n in doc.findall('//mdbStellvertretendesMitgliedGremium'):
-        add_to_gremium(n, url, 'stellv_mitglied', engine)
+    end = doc.findtext('.//mdbAustrittsdatum')
+    if end:
+        mdb_membership['end_date'] = parse_date(end)
 
-    for n in doc.findall('//mdbOrdentlichesMitgliedSonstigesGremium'):
-        add_to_gremium(n, url, 'mitglied', engine)
+    if doc.findtext('.//mdbBundestagsvizepraesident'):
+        mdb_membership['role'] = u'Bundestagsvizepräsident'
+    if doc.findtext('.//mdbBundestagspraesident'):
+        mdb_membership['role'] = u'Bundestagspräsident'
 
-    for n in doc.findall('//mdbStellvertretendesMitgliedSonstigesGremium'):
-        add_to_gremium(n, url, 'stellv_mitglied', engine)
+    mdb_membership['label'] = '%s, %s' % (person_data['name'],
+                                          mdb_membership['role'])
+    person_data['memberships'].append(mdb_membership)
 
-    sl.upsert(engine, table_person, p, unique=['source_url'])
-    sl.upsert(engine, table_rolle, r, unique=['person_source_url', 'funktion'])
-    return p
+    #
+    # Membership role for the party.
+    #
+    party = doc.findtext('.//mdbPartei')
+    if party not in orgs:
+        orgs[party] = {
+            'id': make_id('partei', party),
+            'name': party,
+            'classification': 'Partei'
+        }
+
+    party_membership = {
+        'person_id': person_data['id'],
+        'organization_id': orgs[party]['id'],
+        'id': make_link_id(person_data['id'], orgs[party]['id']),
+        'role': 'Mitglied',
+        'label': u'Mitglied %s' % party
+    }
+    person_data['memberships'].append(party_membership)
+
+    #
+    # Memberships in committees.
+    #
+    for role_el in doc.find('.//mdbMitgliedschaften'):
+        role = role_el.get('title')
+        for cmte_el in role_el:
+            mem = add_to_gremium(cmte_el, person_data['id'], role, orgs)
+            person_data['memberships'].append(mem)
+
+    return person_data
+
+
+if __name__ == '__main__':
+    scrape_index()
