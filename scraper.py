@@ -85,7 +85,7 @@ def scrape_gremium(url, orgs):
         'classification': 'Ausschuss',
         'description': doc.findtext('./ausschussAufgabe'),
         'image': doc.findtext('.//ausschussBildURL'),
-        'image_copyright': doc.findtext('./ausschussCopyright'),
+        # 'image_copyright': doc.findtext('./ausschussCopyright'),
         'links': [
             {
                 'note': 'Bundestag.de',
@@ -116,7 +116,7 @@ def scrape_index():
     orgs = {
         'bt': {
             'id': 'de.bundestag.data/bundestag',
-            'name': '18. Deutscher Bundestag',
+            'name': 'Deutscher Bundestag',
             'links': [{
                 'note': 'Bundestag.de',
                 'url': 'https://www.bundestag.de'
@@ -143,7 +143,8 @@ def upload_json(persons, organizations):
     import boto.s3
     from boto.s3.key import Key
     conn = boto.connect_s3(os.environ.get('MORPH_AWS_ACCESS_KEY_ID'),
-                           os.environ.get('MORPH_AWS_SECRET_ACCESS_KEY'))
+                           os.environ.get('MORPH_AWS_SECRET_ACCESS_KEY'),
+                           validate_certs=False)
     bucket = conn.get_bucket('popolo.offenesparlament.de')
     k = Key(bucket)
     k.key = 'mdbs.json'
