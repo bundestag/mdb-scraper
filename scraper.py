@@ -1,5 +1,6 @@
 # coding: utf-8
 import os
+import json
 from datetime import datetime
 from normality import slugify
 from hashlib import sha1
@@ -62,6 +63,7 @@ def add_to_gremium(node, person_id, role, orgs):
                 'identifier': node.get('id'),
                 'scheme': 'bundestag'
             }],
+            'parent_id': orgs['bt']['id'],
             'classification': 'Sonstiges'
         }
     membership_data = {
@@ -94,6 +96,7 @@ def scrape_gremium(url, orgs):
                 'url': url
             }
         ],
+        'parent_id': orgs['bt']['id'],
         'identifiers': [{
             'identifier': id,
             'scheme': 'bundestag'
@@ -111,8 +114,8 @@ def scrape_gremium(url, orgs):
 
 def scrape_index():
     orgs = {
-        '18bt': {
-            'id': make_id('wahlperiode', '18'),
+        'bt': {
+            'id': 'de.bundestag.data/bundestag',
             'name': '18. Deutscher Bundestag',
             'links': [{
                 'note': 'Bundestag.de',
@@ -125,8 +128,6 @@ def scrape_index():
     for info_url in doc.findall(".//ausschussDetailXML"):
         scrape_gremium(info_url.text.strip(), orgs)
 
-    # pprint(orgs)
-
     persons = []
     doc = open_xml(MDB_INDEX_URL)
     for info_url in doc.findall(".//mdbInfoXMLURL"):
@@ -134,55 +135,26 @@ def scrape_index():
         # pprint(person)
         persons.append(person)
 
-    popit_upload(orgs.values(), persons)
+    upload_json(persons, orgs.values())
 
 
-# def dump_json(persons, organizations):
-#     import json
-#     with open('data.json', 'wb') as fh:
-#         json.dump({
-#             'organizations': organizations,
-#             'persons': persons
-#         }, fh)
-
-
-# def load_json():
-#     import json
-#     with open('data.json', 'rb') as fh:
-#         return json.load(fh)
-
-
-def popit_upload(organizations, persons):
-    from popit_api import PopIt
-    from slumber.exceptions import HttpClientError, HttpServerError
-    api = PopIt(instance='de-bundestag',
-                api_key=os.environ.get('MORPH_POPIT_KEY'))
-
-    for org in organizations:
-        try:
-            api.organizations(org.get('id')).get()
-            api.organizations(org.get('id')).put(org)
-        except HttpClientError:
-            api.organizations.post(org)
-
-    for person in persons:
-        memberships = person.pop('memberships')
-        try:
-            api.persons(person.get('id')).get()
-            api.persons(person.get('id')).put(person)
-        except HttpClientError:
-            api.persons.post(person)
-
-        for mem in memberships:
-            try:
-                api.memberships(mem.get('id')).get()
-                api.memberships(mem.get('id')).put(mem)
-            except HttpClientError, jjj:
-                print jjj.response.content
-                try:
-                    api.memberships.post(mem)
-                except (HttpClientError, HttpServerError), hce:
-                    print hce.response.content
+def upload_json(persons, organizations):
+    import boto
+    import boto.s3
+    from boto.s3.key import Key
+    conn = boto.connect_s3(os.environ.get('MORPH_AWS_ACCESS_KEY_ID'),
+                           os.environ.get('MORPH_AWS_SECRET_ACCESS_KEY'))
+    bucket = conn.get_bucket('popolo.offenesparlament.de')
+    k = Key(bucket)
+    k.key = 'mdbs.json'
+    data = json.dumps({
+        'organizations': organizations,
+        'persons': persons
+    })
+    k.set_metadata('Content-Type', 'application/json')
+    k.set_contents_from_string(data)
+    k.make_public()
+    print k.generate_url(0, query_auth=False, force_http=True)
 
 
 def scrape_mdb(url, orgs):
@@ -214,11 +186,11 @@ def scrape_mdb(url, orgs):
         'image_copyright': doc.findtext('.//mdbFotoCopyright'),
         'links': [
             {
-                'note': 'Bundestag.de',
+                'note': 'Bundestag bio page',
                 'url': doc.findtext('.//mdbBioURL'),
             },
             {
-                'note': 'Bundestag XML',
+                'note': 'Bundestag XML data',
                 'url': url
             },
             {
@@ -264,16 +236,38 @@ def scrape_mdb(url, orgs):
             del person_data[key]
 
     #
+    # Membership role for the party.
+    #
+    party = doc.findtext('.//mdbPartei')
+    if party not in orgs:
+        orgs[party] = {
+            'id': make_id('partei', party),
+            'name': party,
+            'classification': 'Partei'
+        }
+
+    party_membership = {
+        'person_id': person_data['id'],
+        'organization_id': orgs[party]['id'],
+        'id': make_link_id(person_data['id'], orgs[party]['id']),
+        'role': 'Mitglied',
+        'label': u'Mitglied %s' % party
+    }
+    person_data['memberships'].append(party_membership)
+
+    #
     # Membership role for the parliament.
     #
     mdb_membership = {
         'person_id': person_data['id'],
-        'organization_id': orgs['18bt']['id'],
-        'id': make_link_id(person_data['id'], orgs['18bt']['id']),
+        'organization_id': orgs['bt']['id'],
+        'id': make_link_id(person_data['id'], orgs['bt']['id']),
         'role': 'Mitglied des Bundestages',
         'status': doc.find('.//mdbID').get('status'),
         'mandate_type': doc.findtext('.//mdbGewaehlt'),
-        'faction': doc.findtext('.//mdbFraktion')
+        'faction': doc.findtext('.//mdbFraktion'),
+        'on_behalf_of_id': orgs[party]['id'],
+        'legislative_period_id': make_id('wahlperiode', 18)
     }
 
     wk = doc.findtext('.//mdbWahlkreisNummer')
@@ -305,26 +299,6 @@ def scrape_mdb(url, orgs):
     mdb_membership['label'] = '%s, %s' % (person_data['name'],
                                           mdb_membership['role'])
     person_data['memberships'].append(mdb_membership)
-
-    #
-    # Membership role for the party.
-    #
-    party = doc.findtext('.//mdbPartei')
-    if party not in orgs:
-        orgs[party] = {
-            'id': make_id('partei', party),
-            'name': party,
-            'classification': 'Partei'
-        }
-
-    party_membership = {
-        'person_id': person_data['id'],
-        'organization_id': orgs[party]['id'],
-        'id': make_link_id(person_data['id'], orgs[party]['id']),
-        'role': 'Mitglied',
-        'label': u'Mitglied %s' % party
-    }
-    person_data['memberships'].append(party_membership)
 
     #
     # Memberships in committees.
