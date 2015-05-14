@@ -3,3 +3,4 @@
 lxml==3.4.4
 cssselect==0.9.1
 normality
+PopIt-Python==0.1.11

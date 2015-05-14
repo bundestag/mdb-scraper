@@ -1,10 +1,11 @@
 # coding: utf-8
+import os
 from datetime import datetime
 from normality import slugify
 from hashlib import sha1
 import requests
 from lxml import etree
-from pprint import pprint
+# from pprint import pprint
 
 URL = "https://www.bundestag.de/"
 MDB_INDEX_URL = URL + "xml/mdb/index.xml"
@@ -30,7 +31,7 @@ def parse_date(text):
 
 def make_id(group, id):
     id = slugify(unicode(id), sep='-')
-    return 'de.bundestag.data/%s/%s' % (group, id)
+    return 'de.bundestag.data:%s:%s' % (group, id)
 
 
 def make_link_id(lid, rid):
@@ -104,6 +105,7 @@ def scrape_gremium(url, orgs):
             'label': 'Anschrift',
             'value': doc.findtext('.//ausschussKontakt')
         }]
+    print 'Scraping org:', org_data['id']
     orgs[id] = org_data
 
 
@@ -123,7 +125,7 @@ def scrape_index():
     for info_url in doc.findall(".//ausschussDetailXML"):
         scrape_gremium(info_url.text.strip(), orgs)
 
-    pprint(orgs)
+    # pprint(orgs)
 
     persons = []
     doc = open_xml(MDB_INDEX_URL)
@@ -132,12 +134,55 @@ def scrape_index():
         # pprint(person)
         persons.append(person)
 
-    import json
-    with open('data.json', 'wb') as fh:
-        json.dump({
-            'organizations': orgs.values(),
-            'persons': persons
-        }, fh)
+    popit_upload(orgs.values(), persons)
+
+
+# def dump_json(persons, organizations):
+#     import json
+#     with open('data.json', 'wb') as fh:
+#         json.dump({
+#             'organizations': organizations,
+#             'persons': persons
+#         }, fh)
+
+
+# def load_json():
+#     import json
+#     with open('data.json', 'rb') as fh:
+#         return json.load(fh)
+
+
+def popit_upload(organizations, persons):
+    from popit_api import PopIt
+    from slumber.exceptions import HttpClientError, HttpServerError
+    api = PopIt(instance='de-bundestag',
+                api_key=os.environ.get('MORPH_POPIT_KEY'))
+
+    for org in organizations:
+        try:
+            api.organizations(org.get('id')).get()
+            api.organizations(org.get('id')).put(org)
+        except HttpClientError:
+            api.organizations.post(org)
+
+    for person in persons:
+        memberships = person.pop('memberships')
+        try:
+            api.persons(person.get('id')).get()
+            api.persons(person.get('id')).put(person)
+        except HttpClientError:
+            api.persons.post(person)
+
+        for mem in memberships:
+            try:
+                api.memberships(mem.get('id')).get()
+                api.memberships(mem.get('id')).put(mem)
+            except HttpClientError, jjj:
+                print jjj.response.content
+                try:
+                    api.memberships.post(mem)
+                except (HttpClientError, HttpServerError), hce:
+                    print hce.response.content
 
 
 def scrape_mdb(url, orgs):
@@ -164,7 +209,7 @@ def scrape_mdb(url, orgs):
         'trivia': doc.findtext('.//mdbWissenswertes'),
         'interests': doc.findtext('.//mdbVeroeffentlichungspflichtigeAngaben'),
         'marital_status': doc.findtext('.//mdbFamilienstand'),
-        'biography': doc.findtext('.//mdbBiografischeInformationen'),
+        'summary': doc.findtext('.//mdbBiografischeInformationen'),
         'image': doc.findtext('.//mdbFotoURL'),
         'image_copyright': doc.findtext('.//mdbFotoCopyright'),
         'links': [
@@ -186,7 +231,7 @@ def scrape_mdb(url, orgs):
             }
         ],
         'identifiers': [{
-            'identifier': id,
+            'identifier': unicode(id),
             'scheme': 'bundestag'
         }],
         'contact_details': [
@@ -212,7 +257,7 @@ def scrape_mdb(url, orgs):
         })
 
     person_data['name'] = make_name(person_data)
-    print 'Scraping', person_data['id'], person_data['name']
+    print 'Scraping person:', person_data['id']
 
     for key, value in person_data.items():
         if isinstance(value, basestring) and not len(value.strip()):
@@ -235,7 +280,7 @@ def scrape_mdb(url, orgs):
     if wk:
         mdb_membership['area'] = {
             'name': doc.findtext('.//mdbWahlkreisName'),
-            'identifier': make_id('wahlkreis', wk),
+            'id': make_id('wahlkreis', wk),
             'constituency': wk,
             'url': doc.findtext('.//mdbWahlkreisURL'),
             'classification': 'Wahlkreis',
@@ -244,7 +289,7 @@ def scrape_mdb(url, orgs):
     else:
         mdb_membership['area'] = {
             'name': doc.findtext('.//mdbLand'),
-            'identifier': make_id('land', doc.findtext('.//mdbLand')),
+            'id': make_id('land', doc.findtext('.//mdbLand')),
             'classification': 'Bundesland'
         }
 
