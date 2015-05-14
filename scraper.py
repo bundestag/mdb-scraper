@@ -129,11 +129,11 @@ def scrape_index():
         scrape_gremium(info_url.text.strip(), orgs)
 
     persons = []
-    doc = open_xml(MDB_INDEX_URL)
-    for info_url in doc.findall(".//mdbInfoXMLURL"):
-        person = scrape_mdb(info_url.text, orgs)
-        # pprint(person)
-        persons.append(person)
+    # doc = open_xml(MDB_INDEX_URL)
+    # for info_url in doc.findall(".//mdbInfoXMLURL"):
+    #     person = scrape_mdb(info_url.text, orgs)
+    #     # pprint(person)
+    #     persons.append(person)
 
     upload_json(persons, orgs.values())
 
@@ -145,9 +145,9 @@ def upload_json(persons, organizations):
     conn = boto.connect_s3(os.environ.get('MORPH_AWS_ACCESS_KEY_ID'),
                            os.environ.get('MORPH_AWS_SECRET_ACCESS_KEY'),
                            validate_certs=False)
-    bucket = conn.get_bucket('popolo.offenesparlament.de')
+    bucket = conn.get_bucket('offenesparlament')
     k = Key(bucket)
-    k.key = 'mdbs.json'
+    k.key = 'exports/popolo.json'
     data = json.dumps({
         'organizations': organizations,
         'persons': persons
