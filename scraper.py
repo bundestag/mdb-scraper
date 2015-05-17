@@ -140,7 +140,7 @@ def scrape_index():
 
 def store_json(persons, organizations):
     import dataset
-    table = dataset.connect('sqlite://data.sqlite')['data']
+    table = dataset.connect('sqlite:///data.sqlite')['data']
     data = json.dumps({
         'organizations': organizations,
         'persons': persons
