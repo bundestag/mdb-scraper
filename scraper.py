@@ -135,27 +135,21 @@ def scrape_index():
         # pprint(person)
         persons.append(person)
 
-    upload_json(persons, orgs.values())
+    store_json(persons, orgs.values())
 
 
-def upload_json(persons, organizations):
-    import boto
-    import boto.s3
-    from boto.s3.key import Key
-    conn = boto.connect_s3(os.environ.get('MORPH_AWS_ACCESS_KEY_ID'),
-                           os.environ.get('MORPH_AWS_SECRET_ACCESS_KEY'),
-                           validate_certs=False)
-    bucket = conn.get_bucket('offenesparlament')
-    k = Key(bucket)
-    k.key = 'popolo-export.json'
+def store_json(persons, organizations):
+    import dataset
+    table = dataset.connect('sqlite://data.sqlite')['data']
     data = json.dumps({
         'organizations': organizations,
         'persons': persons
     })
-    k.set_contents_from_string(data)
-    k.set_metadata('Content-Type', 'application/json')
-    k.make_public()
-    print k.generate_url(0, query_auth=False, force_http=True)
+    data = {
+        'json': data,
+        'last_update': datetime.utcnow().date().isoformat()
+    }
+    table.upsert(data, ['last_update'])
 
 
 def scrape_mdb(url, orgs):
