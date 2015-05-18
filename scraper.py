@@ -64,7 +64,7 @@ def add_to_gremium(node, person_id, role, orgs):
                 'scheme': 'bundestag'
             }],
             'parent_id': orgs['bt']['id'],
-            'classification': 'Sonstiges'
+            'classification': 'sonstiges'
         }
     membership_data = {
         'id': make_link_id(person_id, orgs[id]['id']),
@@ -82,7 +82,7 @@ def scrape_gremium(url, orgs):
     org_data = {
         'id': make_id('gremium', id),
         'name': doc.findtext('./ausschussName'),
-        'classification': 'Ausschuss',
+        'classification': 'ausschuss',
         'description': doc.findtext('./ausschussAufgabe'),
         'image': doc.findtext('.//ausschussBildURL'),
         # 'image_copyright': doc.findtext('./ausschussCopyright'),
@@ -121,7 +121,7 @@ def scrape_index():
                 'note': 'Bundestag.de',
                 'url': 'https://www.bundestag.de'
             }],
-            'classification': 'Parlament'
+            'classification': 'legislature'
         }
     }
     doc = open_xml(AUSSCHUSS_INDEX_URL)
@@ -238,7 +238,7 @@ def scrape_mdb(url, orgs):
         orgs[party] = {
             'id': make_id('partei', party),
             'name': party,
-            'classification': 'Partei'
+            'classification': 'party'
         }
 
     party_membership = {
@@ -272,14 +272,14 @@ def scrape_mdb(url, orgs):
             'id': make_id('wahlkreis', wk),
             'constituency': wk,
             'url': doc.findtext('.//mdbWahlkreisURL'),
-            'classification': 'Wahlkreis',
+            'classification': 'wahlkreis',
             'parent_id': make_id('land', doc.findtext('.//mdbLand'))
         }
     else:
         mdb_membership['area'] = {
             'name': doc.findtext('.//mdbLand'),
             'id': make_id('land', doc.findtext('.//mdbLand')),
-            'classification': 'Bundesland'
+            'classification': 'bundesland'
         }
 
     end = doc.findtext('.//mdbAustrittsdatum')
