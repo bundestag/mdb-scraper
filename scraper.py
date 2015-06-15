@@ -166,7 +166,7 @@ def scrape_mdb(url, orgs):
         'academic_prefix': doc.findtext('.//mdbAkademischerTitel'),
         'location': doc.findtext('.//mdbOrtszusatz'),
         'birth_date': parse_date(doc.findtext('.//mdbGeburtsdatum')),
-        'faith': doc.findtext('.//mdbReligionKonfession'),
+        'religion': doc.findtext('.//mdbReligionKonfession'),
         'profession': doc.findtext('.//mdbBeruf'),
         'profession_group': doc.find('.//mdbBeruf').get('berufsfeld'),
         'graduate_education': doc.findtext('.//mdbHochschulbildung'),
