@@ -1,5 +1,5 @@
 # coding: utf-8
-import os
+import sys
 import json
 from datetime import datetime
 from normality import slugify
@@ -112,7 +112,7 @@ def scrape_gremium(url, orgs):
     orgs[id] = org_data
 
 
-def scrape_index():
+def scrape_index(out_file):
     orgs = {
         'bt': {
             'id': 'de.bundestag.data/bundestag',
@@ -135,21 +135,15 @@ def scrape_index():
         # pprint(person)
         persons.append(person)
 
-    store_json(persons, orgs.values())
+    store_json(out_file, persons, orgs.values())
 
 
-def store_json(persons, organizations):
-    import dataset
-    table = dataset.connect('sqlite:///data.sqlite')['data']
-    data = json.dumps({
-        'organizations': organizations,
-        'persons': persons
-    })
-    data = {
-        'json': data,
-        'last_update': datetime.utcnow().date().isoformat()
-    }
-    table.upsert(data, ['last_update'])
+def store_json(out_file, persons, organizations):
+    with open(out_file, 'w') as fh:
+        json.dump({
+            'organizations': organizations,
+            'persons': persons
+        }, fh, indent=2)
 
 
 def scrape_mdb(url, orgs):
@@ -308,4 +302,4 @@ def scrape_mdb(url, orgs):
 
 
 if __name__ == '__main__':
-    scrape_index()
+    scrape_index(sys.argv[1])
